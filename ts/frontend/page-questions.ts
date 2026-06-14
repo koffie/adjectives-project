@@ -1,62 +1,13 @@
 import { Assistant, ContradictionError, Matcher } from '../shared/assistant.js';
 import { Book, Context } from '../shared/core.js';
 import { formatContext } from './formatter.js';
+import { katexTypeset } from './katex-typeset.js';
+import navigation from './navigation.js';
 import { create } from './util.js';
 
 const ADJECTIVES_CONSTRAINTS: { [type: string]: { [adj: string]: boolean[] } } = {
-    'scheme': {
-        'cohen-macaulay': [],
-        'connected': [true],
-        'excellent': [],
-        // 'finite-dimensional',
-        // 'integral',
-        // 'irreducible',
-        'jacobson': [],
-        // 'locally-noetherian',
-        // 'noetherian',
-        // 'normal',
-        // 'quasi-affine',
-        // 'quasi-compact',
-        // 'quasi-separated',
-        'reduced': [true],
-        // 'regular',
-        // 'semi-separated',
-        // 'separated',
-    },
-    'morphism': {
-        // 'affine',
-        // 'closed-immersion',
-        // 'closed',
-        // 'etale',
-        // 'faithfully-flat',
-        // 'finite',
-        // 'flat',
-        // 'formally-etale',
-        // 'formally-smooth',
-        // 'formally-unramified',
-        // 'homeomorphism',
-        // 'immersion',
-        // 'locally-of-finite-presentation',
-        // 'locally-of-finite-type',
-        // 'of-finite-presentation',
-        // 'of-finite-type',
-        // 'open-immersion',
-        // 'open',
-        // 'proper',
-        // 'quasi-affine',
-        // 'quasi-compact',
-        // 'quasi-finite',
-        // 'quasi-separated',
-        // 'regular',
-        // 'semi-separated',
-        // 'separated',
-        // 'smooth',
-        // 'surjective',
-        // 'syntomic': [],
-        // 'universally-closed',
-        // 'universally-open',
-        // 'unramified'
-    }
+    'scheme': {},
+    'morphism': {}
 };
 
 function combinations<T>(array: T[], size: number): T[][] {
@@ -141,6 +92,41 @@ function questions(summary: Book, type: string, constraints: { [adj: string]: bo
     return questions;
 }
 
+function missingProperties(summary: Book): { type: string, id: string, missing: string[] }[] {
+    const assistant = new Assistant(summary);
+    const results: { type: string, id: string, missing: string[] }[] = [];
+
+    for (const type in summary.examples) {
+        if (!(type in summary.adjectives)) continue;
+        const allAdjs = Object.keys(summary.adjectives[type]);
+
+        for (const id in summary.examples[type]) {
+            const context: Context = {};
+            const addToContext = (t: string, eid: string) => {
+                if (!(t in context)) context[t] = {};
+                if (eid in context[t]) return;
+                context[t][eid] = structuredClone(summary.examples[t][eid]);
+                for (const key in summary.examples[t][eid].args) {
+                    const argType = summary.types[t].parameters[key];
+                    addToContext(argType, summary.examples[t][eid].args[key]);
+                }
+            };
+            addToContext(type, id);
+
+            try { assistant.deduce(context); } catch (err) {
+                if (!(err instanceof ContradictionError)) throw err;
+            }
+
+            const missing = allAdjs.filter(adj => !(adj in context[type][id].adjectives));
+            if (missing.length > 0)
+                results.push({ type, id, missing });
+        }
+    }
+
+    results.sort((a, b) => a.missing.length - b.missing.length || a.id.localeCompare(b.id));
+    return results;
+}
+
 function shuffle<T>(array: T[]): void {
     let index = array.length;
     while (index != 0) {
@@ -150,22 +136,16 @@ function shuffle<T>(array: T[]): void {
     }
 }
 
-export function pageQuestions(summary: Book): HTMLElement {
-    const page = create('div', { class: 'page page-questions' });
+function pageOpenQuestions(summary: Book): HTMLElement {
+    const container = create('div');
+    container.append(create('span', { class: 'title' }, 'Questions'));
+    container.append(create('p', {}, 'The questions below could not be answered with \'yes\' by the examples, or with \'no\' using the theorems.'));
 
-    // title
-    page.append(create('span', { class: 'title' }, 'Questions'));
-
-    // description
-    page.append(create('p', {}, 'The questions below could not be answered with \'yes\' by the examples, or with \'no\' using the theorems.'));
-
-    // loading icon
     const loading = create('div', { class: 'loading' });
-    page.append(loading);
+    container.append(loading);
 
-    // table
     const table = create('table', { style: 'margin-bottom: 4px;' });
-    page.append(table);
+    container.append(table);
     setTimeout(() => {
         table.append(create('tr', {}, create('th', {}, 'Questions')));
         const qs: Context[] = [];
@@ -187,8 +167,62 @@ export function pageQuestions(summary: Book): HTMLElement {
                 ])
             ]));
         }
+        katexTypeset(table);
         loading.remove();
     }, 0);
 
+    return container;
+}
+
+function pageMissingPropertiesTable(summary: Book, type: string, entries: { id: string, missing: string[] }[]): HTMLElement {
+    const container = create('div');
+    container.append(create('span', { class: 'title' }, `${summary.types[type].name}s`));
+
+    const table = create('table', { style: 'margin-bottom: 4px;' });
+    container.append(table);
+    table.append(create('tr', {}, [create('th', {}, 'Example'), create('th', {}, 'Missing properties')]));
+    for (const { id, missing: adjs } of entries) {
+        const adjSpan = create('span');
+        adjs.forEach((adj, i) => {
+            if (i > 0) adjSpan.append(', ');
+            adjSpan.append(navigation.anchorAdjective(type, adj));
+        });
+        table.append(create('tr', {}, [
+            create('td', {}, navigation.anchorExample(type, id)),
+            create('td', {}, adjSpan)
+        ]));
+    }
+    katexTypeset(table);
+    return container;
+}
+
+function pageMissingProperties(summary: Book): HTMLElement {
+    const container = create('div');
+    container.append(create('span', { class: 'title' }, 'Examples with missing properties'));
+    container.append(create('p', {}, 'The following examples have adjectives that could not be determined from the given theorems.'));
+
+    const loading = create('div', { class: 'loading' });
+    container.append(loading);
+
+    setTimeout(() => {
+        const missing = missingProperties(summary);
+        console.log(`#examples with missing properties = ${missing.length}`);
+        const byType: { [type: string]: { id: string, missing: string[] }[] } = {};
+        for (const { type, id, missing: adjs } of missing) {
+            if (!(type in byType)) byType[type] = [];
+            byType[type].push({ id, missing: adjs });
+        }
+        for (const type in byType)
+            container.append(pageMissingPropertiesTable(summary, type, byType[type]));
+        loading.remove();
+    }, 0);
+
+    return container;
+}
+
+export function pageQuestions(summary: Book): HTMLElement {
+    const page = create('div', { class: 'page page-questions' });
+    page.append(pageOpenQuestions(summary));
+    page.append(pageMissingProperties(summary));
     return page;
 }
