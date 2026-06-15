@@ -6,7 +6,7 @@ import navigation from './navigation.js';
 import { create } from './util.js';
 
 const ADJECTIVES_CONSTRAINTS: { [type: string]: { [adj: string]: boolean[] } } = {
-    'scheme': {},
+    'scheme': { 'nonempty': [] },
     'morphism': {}
 };
 
@@ -36,9 +36,8 @@ function product<T>(array: T[], size: number): T[][] {
     return results;
 }
 
-function questions(summary: Book, type: string, constraints: { [adj: string]: boolean[] }): Context[] {
+function questions(summary: Book, type: string, constraints: { [adj: string]: boolean[] }, minAdjectives: number = 1, maxAdjectives: number = 2): Context[] {
     const adjectives = Object.keys(summary.adjectives[type]);
-    const maxAdjectives = 2;
 
     const assistant = new Assistant(summary);
     const questions: Context[] = []; // contains the original questions
@@ -47,7 +46,7 @@ function questions(summary: Book, type: string, constraints: { [adj: string]: bo
     const id = 'X'; // dummy name
 
     // GENERATE QUESTIONS
-    for (let n = 1; n <= maxAdjectives; ++n) { // loop over number of adjectives
+    for (let n = minAdjectives; n <= maxAdjectives; ++n) { // loop over number of adjectives
         for (const adjs of combinations(adjectives, n)) { // loop over all combinations of adjectives
             for (const values of product([true, false], n)) { // loop over all values of the adjectives
                 if (adjs.some((adj, i) => (adj in constraints && !constraints[adj].includes(values[i])))) // if some value does not match the constraints, just skip this one
@@ -72,23 +71,6 @@ function questions(summary: Book, type: string, constraints: { [adj: string]: bo
         }
     }
 
-    // FILTER QUESTIONS (IF A => B, THEN WE MAY AS WELL OMIT B)
-    for (let i = 0; i < questions.length; ++i) {
-        for (let j = 0; j < questions.length; ++j) {
-            if (i == j) continue;
-            const A = questionsDeduced[i];
-            const B = questions[j]; // use this so that we need to check fewer conditions
-            const matcher = new Matcher(summary, B, A);
-
-            if (matcher.match(B[type][id], A[type][id])) { // check if A => B
-                questions.splice(j, 1); // remove B
-                questionsDeduced.splice(j, 1); // remove B
-                --j; // shift j one back
-                if (i > j) --i;// shift i one back if i > j
-            }
-        }
-    }
-
     return questions;
 }
 
@@ -98,7 +80,8 @@ function missingProperties(summary: Book): { type: string, id: string, missing: 
 
     for (const type in summary.examples) {
         if (!(type in summary.adjectives)) continue;
-        const allAdjs = Object.keys(summary.adjectives[type]);
+        const constraints = ADJECTIVES_CONSTRAINTS[type] ?? {};
+        const allAdjs = Object.keys(summary.adjectives[type]).filter(adj => !(adj in constraints && constraints[adj].length === 0));
 
         for (const id in summary.examples[type]) {
             const context: Context = {};
@@ -136,7 +119,30 @@ function shuffle<T>(array: T[]): void {
     }
 }
 
-function pageOpenQuestions(summary: Book): HTMLElement {
+function questionsTable(summary: Book, minAdjectives: number, maxAdjectives: number): HTMLElement {
+    const table = create('table', { style: 'margin-bottom: 4px;' });
+    table.append(create('tr', {}, create('th', {}, 'Questions')));
+    const qs: Context[] = [];
+    for (const type in ADJECTIVES_CONSTRAINTS)
+        qs.push(...questions(summary, type, ADJECTIVES_CONSTRAINTS[type], minAdjectives, maxAdjectives));
+    console.log(`#questions (${minAdjectives}-${maxAdjectives} adjectives) = ${qs.length}`);
+    shuffle(qs);
+    for (const question of qs) {
+        table.append(create('tr', {}, [
+            create('td', {}, [
+                create('span', {}, [
+                    'Does there exist ',
+                    formatContext(summary, question),
+                    '?'
+                ])
+            ])
+        ]));
+    }
+    katexTypeset(table);
+    return table;
+}
+
+function pageOpenQuestions(summary: Book, query: { [key: string]: string }): HTMLElement {
     const container = create('div');
     container.append(create('span', { class: 'title' }, 'Questions'));
     container.append(create('p', {}, 'The questions below could not be answered with \'yes\' by the examples, or with \'no\' using the theorems.'));
@@ -144,30 +150,13 @@ function pageOpenQuestions(summary: Book): HTMLElement {
     const loading = create('div', { class: 'loading' });
     container.append(loading);
 
-    const table = create('table', { style: 'margin-bottom: 4px;' });
-    container.append(table);
     setTimeout(() => {
-        table.append(create('tr', {}, create('th', {}, 'Questions')));
-        const qs: Context[] = [];
-        for (const type in ADJECTIVES_CONSTRAINTS)
-            qs.push(...questions(summary, type, ADJECTIVES_CONSTRAINTS[type]));
-        console.log(`#questions = ${qs.length}`);
-        shuffle(qs);
-        let i = 0;
-        const maxQuestions = 25;
-        for (const question of qs) {
-            if (++i > maxQuestions) break;
-            table.append(create('tr', {}, [
-                create('td', {}, [
-                    create('span', {}, [
-                        'Does there exist ',
-                        formatContext(summary, question),
-                        '?'
-                    ])
-                ])
-            ]));
+        container.append(create('span', { class: 'subtitle' }, 'Questions involving pairs of properties'));
+        container.append(questionsTable(summary, 1, 2));
+        if ('triples' in query) {
+            container.append(create('span', { class: 'subtitle' }, 'Questions involving triples of properties'));
+            container.append(questionsTable(summary, 3, 3));
         }
-        katexTypeset(table);
         loading.remove();
     }, 0);
 
@@ -220,9 +209,9 @@ function pageMissingProperties(summary: Book): HTMLElement {
     return container;
 }
 
-export function pageQuestions(summary: Book): HTMLElement {
+export function pageQuestions(summary: Book, query: { [key: string]: string }): HTMLElement {
     const page = create('div', { class: 'page page-questions' });
-    page.append(pageOpenQuestions(summary));
+    page.append(pageOpenQuestions(summary, query));
     page.append(pageMissingProperties(summary));
     return page;
 }

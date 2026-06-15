@@ -35,7 +35,7 @@ function navigateCallback(state: any): void {
         case 'type': return setContent(pageType(summary, query))
         case 'contribute': return setContent(pageContribute())
         case 'help': return setContent(pageHelp())
-        case 'questions': return setContent(pageQuestions(summary))
+        case 'questions': return setContent(pageQuestions(summary, query))
         case 'graph': return setContent(pageGraph(summary, query))
     }
     setContent(create('div', { class: 'page' }, [
