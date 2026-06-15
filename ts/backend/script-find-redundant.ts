@@ -6,6 +6,8 @@ import { Log, PATH_JSON, PATH_SUMMARY } from './general.js';
 import path from 'path';
 
 function main() {
+    const includeDescribed = process.argv.includes('--all');
+
     // load summary
     const book = new Book();
     Log.action('Reading summary.json', () => {
@@ -23,7 +25,7 @@ function main() {
     findRedundantTheorems(book);
 
     // find redundant examples
-    findRedundantExamples(book);
+    findRedundantExamples(book, includeDescribed);
 }
 
 function printProof(proof: Proof[]): void {
@@ -107,7 +109,7 @@ function createLocalContext(book: Book, type: string, id: string): Context {
     return context;
 }
 
-function findRedundantExamples(book: Book): void {
+function findRedundantExamples(book: Book, includeDescribed: boolean = false): void {
     // reset the examples in the book to only have the adjectives which are not deduced using the theorems
     for (const type in book.examples) {
         for (const id in book.examples[type]) {
@@ -131,8 +133,8 @@ function findRedundantExamples(book: Book): void {
             const exampleWithProofs = book.deserializeExample("tmp", JSON.parse(fs.readFileSync(pathExample, 'utf8')));
 
             for (const adjective in example.adjectives) {
-                // skip adjectives that have human-written proof
-                if (adjective in exampleWithProofs.proofs && typeof exampleWithProofs.proofs[adjective] === "string") {
+                // skip adjectives that have human-written proof (unless --all is passed)
+                if (!includeDescribed && adjective in exampleWithProofs.proofs && typeof exampleWithProofs.proofs[adjective] === "string") {
                     continue;
                 }
 
